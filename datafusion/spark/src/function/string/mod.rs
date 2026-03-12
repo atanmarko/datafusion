@@ -25,6 +25,7 @@ pub mod ilike;
 pub mod length;
 pub mod like;
 pub mod luhn_check;
+mod regexp_extract;
 pub mod space;
 pub mod substring;
 

@@ -39,6 +39,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 /// Spark-compatible `regexp_extract` expression
+/// Signature: regexp_extract(str, pattern, idx)
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#regexp_extract>
 /// Extract the first string in the str that match the regexp expression and corresponding to the regex group index.
 #[derive(Debug, PartialEq, Eq, Hash)]

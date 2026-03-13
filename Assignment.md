@@ -146,6 +146,17 @@ compile the regex once per batch rather than per row.
 However, the current implementation prioritizes correctness, clarity,
 and consistency with existing Spark function patterns in DataFusion.
 
+
+------------------------------------------------------------------------
+
+# Test the implementation
+
+```bash
+cargo test -p datafusion-spark --lib function::string::regexp_extract
+```
+
+
+
 ------------------------------------------------------------------------
 
 # Summary

@@ -43,6 +43,7 @@ make_udf_function!(elt::SparkElt, elt);
 make_udf_function!(like::SparkLike, like);
 make_udf_function!(luhn_check::SparkLuhnCheck, luhn_check);
 make_udf_function!(format_string::FormatStringFunc, format_string);
+make_udf_function!(regexp_extract::SparkRegexpExtract, regexp_extract);
 make_udf_function!(space::SparkSpace, space);
 make_udf_function!(substring::SparkSubstring, substring);
 make_udf_function!(base64::SparkUnBase64, unbase64);
@@ -100,6 +101,11 @@ pub mod expr_fn {
         "Returns a formatted string from printf-style format strings.",
         strfmt args
     ));
+    export_functions!((
+            regexp_extract,
+            "Extracts a regex capture group from the input string.",
+            str pattern idx
+    ));
     export_functions!((space, "Returns a string consisting of n spaces.", arg1));
     export_functions!((
         substring,
@@ -125,6 +131,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         like(),
         luhn_check(),
         format_string(),
+        regexp_extract(),
         space(),
         substring(),
         unbase64(),

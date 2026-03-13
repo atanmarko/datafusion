@@ -34,6 +34,7 @@ use datafusion_expr::{
     Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
+use regex::Regex;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -209,12 +210,200 @@ where
             continue;
         }
 
-        let _value = string_array.value(i);
-        let _pattern = pattern_array.value(i);
-        let _idx = idx_array.value(i);
+        let value = string_array.value(i);
+        let pattern = pattern_array.value(i);
+        let idx = idx_array.value(i);
 
-        builder.append_value("");
+        if idx < 0 {
+            return exec_err!(
+                "regexp_extract group index must be non-negative, got {idx}"
+            );
+        }
+
+        let regex = Regex::new(pattern).map_err(|e| {
+            datafusion_common::DataFusionError::Execution(format!(
+                "Invalid regex in regexp_extract: {e}"
+            ))
+        })?;
+
+        match regex.captures(value) {
+            Some(captures) => match captures.get(idx as usize) {
+                Some(m) => builder.append_value(m.as_str()),
+                None => builder.append_value(""),
+            },
+            None => builder.append_value(""),
+        }
     }
 
     Ok(Arc::new(builder.finish()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{Int64Array, StringArray};
+    use std::sync::Arc;
+
+    #[test]
+    fn test_regexp_extract_basic() -> Result<()> {
+        let values = Arc::new(StringArray::from(vec!["abc-123"])) as ArrayRef;
+        let patterns = Arc::new(StringArray::from(vec!["([a-z]+)-([0-9]+)"])) as ArrayRef;
+        let idx = Arc::new(Int64Array::from(vec![1])) as ArrayRef;
+
+        let result = spark_regexp_extract(&[values, patterns, idx])?;
+
+        let result = result
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("result should be StringArray");
+
+        assert_eq!(result.value(0), "abc");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_regexp_extract_idx_zero_returns_full_match() -> Result<()> {
+        let values = Arc::new(StringArray::from(vec!["abc-123"])) as ArrayRef;
+        let patterns = Arc::new(StringArray::from(vec!["([a-z]+)-([0-9]+)"])) as ArrayRef;
+        let idx = Arc::new(Int64Array::from(vec![0])) as ArrayRef;
+
+        let result = spark_regexp_extract(&[values, patterns, idx])?;
+
+        let result = result
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("result should be StringArray");
+
+        assert_eq!(result.value(0), "abc-123");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_regexp_extract_second_group() -> Result<()> {
+        let values = Arc::new(StringArray::from(vec!["abc-123"])) as ArrayRef;
+        let patterns = Arc::new(StringArray::from(vec!["([a-z]+)-([0-9]+)"])) as ArrayRef;
+        let idx = Arc::new(Int64Array::from(vec![2])) as ArrayRef;
+
+        let result = spark_regexp_extract(&[values, patterns, idx])?;
+
+        let result = result.as_any().downcast_ref::<StringArray>().unwrap();
+
+        assert_eq!(result.value(0), "123");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_regexp_extract_null_pattern_returns_null() -> Result<()> {
+        let values = Arc::new(StringArray::from(vec![Some("abc-123")])) as ArrayRef;
+        let patterns = Arc::new(StringArray::from(vec![None::<&str>])) as ArrayRef;
+        let idx = Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef;
+
+        let result = spark_regexp_extract(&[values, patterns, idx])?;
+
+        let result = result
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("result should be StringArray");
+
+        assert!(result.is_null(0));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_regexp_extract_null_idx_returns_null() -> Result<()> {
+        let values = Arc::new(StringArray::from(vec![Some("abc-123")])) as ArrayRef;
+        let patterns =
+            Arc::new(StringArray::from(vec![Some("([a-z]+)-([0-9]+)")])) as ArrayRef;
+        let idx = Arc::new(Int64Array::from(vec![None])) as ArrayRef;
+
+        let result = spark_regexp_extract(&[values, patterns, idx])?;
+
+        let result = result
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("result should be StringArray");
+
+        assert!(result.is_null(0));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_regexp_extract_invalid_regex_returns_error() {
+        let values = Arc::new(StringArray::from(vec!["abc-123"])) as ArrayRef;
+        let patterns = Arc::new(StringArray::from(vec!["("])) as ArrayRef;
+        let idx = Arc::new(Int64Array::from(vec![1])) as ArrayRef;
+
+        let result = spark_regexp_extract(&[values, patterns, idx]);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_regexp_extract_negative_idx_returns_error() {
+        let values = Arc::new(StringArray::from(vec!["abc-123"])) as ArrayRef;
+        let patterns = Arc::new(StringArray::from(vec!["([a-z]+)-([0-9]+)"])) as ArrayRef;
+        let idx = Arc::new(Int64Array::from(vec![-1])) as ArrayRef;
+
+        let result = spark_regexp_extract(&[values, patterns, idx]);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_regexp_extract_optional_group_not_matched_returns_empty_string() -> Result<()>
+    {
+        let values = Arc::new(StringArray::from(vec!["b"])) as ArrayRef;
+        let patterns = Arc::new(StringArray::from(vec!["(a)?b"])) as ArrayRef;
+        let idx = Arc::new(Int64Array::from(vec![1])) as ArrayRef;
+
+        let result = spark_regexp_extract(&[values, patterns, idx])?;
+
+        let result = result
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("result should be StringArray");
+
+        assert_eq!(result.value(0), "");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_regexp_extract_multiple_rows() -> Result<()> {
+        let values = Arc::new(StringArray::from(vec![
+            Some("abc-123"),
+            Some("def-456"),
+            Some("hello"),
+            None,
+        ])) as ArrayRef;
+
+        let patterns = Arc::new(StringArray::from(vec![
+            Some("([a-z]+)-([0-9]+)"),
+            Some("([a-z]+)-([0-9]+)"),
+            Some("([a-z]+)-([0-9]+)"),
+            Some("([a-z]+)-([0-9]+)"),
+        ])) as ArrayRef;
+
+        let idx = Arc::new(Int64Array::from(vec![Some(2), Some(1), Some(1), Some(1)]))
+            as ArrayRef;
+
+        let result = spark_regexp_extract(&[values, patterns, idx])?;
+
+        let result = result
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("result should be StringArray");
+
+        assert_eq!(result.value(0), "123");
+        assert_eq!(result.value(1), "def");
+        assert_eq!(result.value(2), "");
+        assert!(result.is_null(3));
+
+        Ok(())
+    }
 }
